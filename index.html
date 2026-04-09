@@ -8,7 +8,7 @@
         :root {
             --bg-color: #0b0b0b;
             --remote-bg: #1a1a1a;
-            --accent-red: #e10600; /* Официальный красный F1 */
+            --accent-red: #e10600;
             --accent-green: #34c759;
             --glass: rgba(255, 255, 255, 0.03);
         }
@@ -31,19 +31,6 @@
             overflow: hidden;
         }
 
-        /* Декоративная полоса на фоне */
-        body::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 10%;
-            width: 2px;
-            height: 100%;
-            background: linear-gradient(to bottom, transparent, var(--accent-red), transparent);
-            opacity: 0.3;
-        }
-
-        /* Логотип F1 */
         .f1-logo {
             position: absolute;
             top: 25px;
@@ -72,7 +59,6 @@
             opacity: 0.6;
         }
 
-        /* Корпус пульта с текстурой карбона */
         .remote-body {
             background: var(--remote-bg);
             background-image: repeating-linear-gradient(45deg, rgba(0,0,0,0.1) 0px, rgba(0,0,0,0.1) 2px, transparent 2px, transparent 4px);
@@ -149,15 +135,11 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            transition: 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            box-shadow: 4px 4px 10px rgba(0,0,0,0.4), -2px -2px 10px rgba(255,255,255,0.02);
+            transition: 0.2s;
+            box-shadow: 4px 4px 10px rgba(0,0,0,0.4);
         }
 
-        .nav-btn:active {
-            color: #fff;
-            background: #333;
-            transform: scale(0.9);
-        }
+        .nav-btn:active { transform: scale(0.9); background: #333; }
 
         .ptt-btn {
             width: 110px;
@@ -169,19 +151,17 @@
             font-weight: 900;
             font-size: 11px;
             cursor: pointer;
-            transition: 0.2s;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            box-shadow: 15px 15px 30px #0a0a0a, -5px -5px 20px #2a2a2a;
+            box-shadow: 15px 15px 30px #0a0a0a;
         }
 
         .ptt-btn.active {
             border-color: var(--accent-red);
             color: var(--accent-red);
-            transform: scale(0.95);
-            box-shadow: inset 5px 5px 15px #000, 0 0 20px rgba(225, 6, 0, 0.3);
+            box-shadow: 0 0 20px rgba(225, 6, 0, 0.3);
         }
 
         .ptt-btn span { font-size: 22px; margin-bottom: 5px; }
@@ -207,17 +187,15 @@
             <button class="nav-btn" id="btnNext">▸</button>
         </div>
 
-        <div class="ptt-container">
-            <button class="ptt-btn" id="pttBtn" disabled>
-                <span>●</span>
-                RADIO
-            </button>
-        </div>
+        <button class="ptt-btn" id="pttBtn" disabled>
+            <span>●</span>
+            RADIO
+        </button>
     </div>
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
-        import { getDatabase, ref, push, onChildAdded, off } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-database.js";
+        import { getDatabase, ref, push, onChildAdded, off, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyB_QZSMUpUHm_1O5s37kLOoiLQTr0b1zmM",
@@ -233,7 +211,8 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
         const myUserId = Math.random().toString(36).substring(2, 10);
-
+        
+        // Audio Context
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
         function playTone(freq, duration, vol = 0.1, type = 'sine') {
@@ -249,51 +228,44 @@
             osc.stop(audioCtx.currentTime + duration);
         }
 
-        function playChannelSound() {
-            playTone(700, 0.1, 0.05, 'triangle');
-            setTimeout(() => playTone(1000, 0.1, 0.05, 'triangle'), 60);
-        }
-
-        function playStartSound() {
-            playTone(1200, 0.04, 0.03, 'square');
-        }
-
-        function playEndSound() {
-            const bufferSize = audioCtx.sampleRate * 0.06;
-            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
-            const data = buffer.getChannelData(0);
-            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 0.08;
-            const source = audioCtx.createBufferSource();
-            source.buffer = buffer;
-            source.connect(audioCtx.destination);
-            source.start();
-        }
-
         let currentChannel = 1;
-        const MAX_CHANNELS = 4;
         let messagesRef, listener, mediaRecorder, isRecording = false, audioChunks = [];
+        let sessionStartTime = Date.now(); // Время входа в канал
 
         const pttBtn = document.getElementById('pttBtn');
         const statusLed = document.getElementById('statusLed');
         const statusText = document.getElementById('statusText');
         const channelDisplay = document.getElementById('channelDisplay');
 
+        // Функция смены канала
         function changeChannel(newChannel) {
+            // Отписываемся от старого канала
             if (messagesRef && listener) off(messagesRef, 'child_added', listener);
+            
             currentChannel = newChannel;
+            sessionStartTime = Date.now(); // Обновляем время входа при смене канала
             channelDisplay.innerText = `CH 0${currentChannel}`;
+            
             messagesRef = ref(db, `channels/${currentChannel}/messages`);
+            
+            // Подписка на новые сообщения
             listener = onChildAdded(messagesRef, (snap) => {
                 const d = snap.val();
-                if (d.senderId !== myUserId) playAudio(d.audioData);
+                
+                // УСЛОВИЕ: проигрываем если отправил другой юзер И сообщение пришло ПОСЛЕ входа в канал
+                if (d.senderId !== myUserId && d.timestamp > sessionStartTime) {
+                    playAudio(d.audioData);
+                }
             });
         }
 
-        document.getElementById('btnNext').onclick = () => { playChannelSound(); changeChannel(currentChannel < MAX_CHANNELS ? currentChannel + 1 : 1); };
-        document.getElementById('btnPrev').onclick = () => { playChannelSound(); changeChannel(currentChannel > 1 ? currentChannel - 1 : MAX_CHANNELS); };
+        // Переключение каналов
+        document.getElementById('btnNext').onclick = () => { changeChannel(currentChannel < 4 ? currentChannel + 1 : 1); };
+        document.getElementById('btnPrev').onclick = () => { changeChannel(currentChannel > 1 ? currentChannel - 1 : 4); };
         
         changeChannel(1);
 
+        // Инициализация микрофона
         navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
             pttBtn.disabled = false;
             mediaRecorder = new MediaRecorder(s);
@@ -301,14 +273,21 @@
             mediaRecorder.onstop = () => {
                 const reader = new FileReader();
                 reader.readAsDataURL(new Blob(audioChunks, { type: 'audio/webm' }));
-                reader.onloadend = () => push(messagesRef, { senderId: myUserId, audioData: reader.result });
+                reader.onloadend = () => {
+                    // Отправляем аудио + свой ID + серверное время
+                    push(messagesRef, { 
+                        senderId: myUserId, 
+                        audioData: reader.result,
+                        timestamp: Date.now() 
+                    });
+                };
                 audioChunks = [];
             };
         });
 
         function playAudio(data) {
             statusLed.className = 'indicator receiving';
-            statusText.innerText = "Receiving Data...";
+            statusText.innerText = "Receiving...";
             const a = new Audio(data);
             a.onended = () => { 
                 statusLed.className = 'indicator'; 
@@ -320,7 +299,6 @@
         const start = () => { 
             if (!mediaRecorder || isRecording) return;
             if (audioCtx.state === 'suspended') audioCtx.resume();
-            playStartSound();
             isRecording = true; 
             mediaRecorder.start(); 
             pttBtn.classList.add('active');
@@ -330,7 +308,6 @@
 
         const stop = () => { 
             if (!isRecording) return;
-            playEndSound();
             isRecording = false; 
             mediaRecorder.stop(); 
             pttBtn.classList.remove('active');
